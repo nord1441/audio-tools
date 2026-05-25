@@ -47,3 +47,49 @@ def test_track_optional_metadata_fields(session):
     fetched = session.scalars(select(Track)).first()
     assert fetched.title == "Bar"
     assert fetched.duration_s == 180.5
+
+
+from audio_tools.core.models import DeviceProfile
+
+
+def test_device_profile_can_be_inserted(session):
+    p = DeviceProfile(
+        name="walkman",
+        mount_hint="/run/media/$USER/WALKMAN",
+        codec="opus",
+        container="ogg",
+        max_bitrate=128,
+        min_bitrate=64,
+        bitrate_step=32,
+        max_size_bytes=14_000_000_000,
+        sample_rate_max=48000,
+        m3u_path_style="relative",
+        folder_layout="{artist}/{album}/{track:02d} - {title}",
+    )
+    session.add(p)
+    session.commit()
+
+    fetched = session.get(DeviceProfile, p.id)
+    assert fetched.name == "walkman"
+    assert fetched.codec == "opus"
+    assert fetched.max_size_bytes == 14_000_000_000
+
+
+def test_device_profile_name_unique(session):
+    session.add(DeviceProfile(
+        name="dup", codec="mp3", container="mp3",
+        max_bitrate=192, min_bitrate=64, bitrate_step=32,
+        max_size_bytes=1_000_000_000, sample_rate_max=44100,
+        m3u_path_style="relative", folder_layout="{title}",
+    ))
+    session.commit()
+    session.add(DeviceProfile(
+        name="dup", codec="mp3", container="mp3",
+        max_bitrate=192, min_bitrate=64, bitrate_step=32,
+        max_size_bytes=1_000_000_000, sample_rate_max=44100,
+        m3u_path_style="relative", folder_layout="{title}",
+    ))
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+    with pytest.raises(IntegrityError):
+        session.commit()

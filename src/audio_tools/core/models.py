@@ -25,3 +25,20 @@ class Track(Base):
     last_analysis_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("ix_tracks_sha1", "sha1"),)
+
+
+class DeviceProfile(Base):
+    __tablename__ = "device_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    mount_hint: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    codec: Mapped[str] = mapped_column(String, nullable=False)
+    container: Mapped[str] = mapped_column(String, nullable=False)
+    max_bitrate: Mapped[int] = mapped_column(Integer, nullable=False)
+    min_bitrate: Mapped[int] = mapped_column(Integer, nullable=False)
+    bitrate_step: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_rate_max: Mapped[int] = mapped_column(Integer, nullable=False)
+    m3u_path_style: Mapped[str] = mapped_column(String, nullable=False)
+    folder_layout: Mapped[str] = mapped_column(String, nullable=False)
