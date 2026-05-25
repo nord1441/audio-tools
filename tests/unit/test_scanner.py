@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from audio_tools.core.scanner import discover_audio_files
+from sqlalchemy import select
+
+from audio_tools.core.models import Track
+from audio_tools.core.scanner import discover_audio_files, scan, ScanResult
 
 
 def _touch(path: Path, content: bytes = b"x") -> None:
@@ -35,12 +38,6 @@ def test_discover_returns_absolute_paths(tmp_path):
 
 def test_discover_empty_dir(tmp_path):
     assert list(discover_audio_files(tmp_path)) == []
-
-
-from sqlalchemy import select
-
-from audio_tools.core.scanner import scan, ScanResult
-from audio_tools.core.models import Track
 
 
 def _make_real_mp3(dst: Path) -> None:
@@ -95,3 +92,15 @@ def test_scan_skips_files_that_mutagen_rejects(tmp_path, session):
     rows = session.scalars(select(Track)).all()
     assert len(rows) == 1
     assert rows[0].path.endswith("good.mp3")
+
+
+def test_scan_is_idempotent(tmp_path, session):
+    _make_real_mp3(tmp_path / "a.mp3")
+
+    result1 = scan(tmp_path, session)
+    result2 = scan(tmp_path, session)
+
+    assert result1.added == 1
+    assert result2.added == 0
+    assert result2.skipped == 0
+    assert len(session.scalars(select(Track)).all()) == 1

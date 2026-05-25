@@ -21,6 +21,7 @@ class ScanResult:
 
 
 def discover_audio_files(root: Path) -> Iterator[Path]:
+    """Yield absolute paths of all supported audio files under root (recursive)."""
     root = root.resolve()
     for path in root.rglob("*"):
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
@@ -33,7 +34,7 @@ def scan(root: Path, session: Session) -> ScanResult:
     Phase 1 scope: detect new files only. Updates/removes/moves arrive in tasks 8-9.
     """
     result = ScanResult()
-    known_paths = {p for p in session.scalars(select(Track.path)).all()}
+    known_paths = set(session.scalars(select(Track.path)).all())
 
     for file_path in discover_audio_files(root):
         path_str = str(file_path)
