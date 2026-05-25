@@ -144,3 +144,52 @@ def test_scan_unchanged_files_are_noops(tmp_path, session):
     scan(tmp_path, session)
     result = scan(tmp_path, session)
     assert result == ScanResult(added=0, updated=0, removed=0, moved=0, skipped=0)
+
+
+def test_scan_computes_sha1_for_new_files(tmp_path, session):
+    _make_real_mp3(tmp_path / "a.mp3")
+    scan(tmp_path, session)
+    track = session.scalars(select(Track)).first()
+    assert track.sha1 is not None
+    assert len(track.sha1) == 40  # sha1 hex digest
+
+
+def test_scan_detects_renamed_file_as_move(tmp_path, session):
+    src = tmp_path / "original.mp3"
+    _make_real_mp3(src)
+    scan(tmp_path, session)
+    original_id = session.scalars(select(Track)).first().id
+
+    # Simulate rename
+    dst = tmp_path / "renamed.mp3"
+    src.rename(dst)
+
+    result = scan(tmp_path, session)
+    assert result.added == 0
+    assert result.removed == 0
+    assert result.moved == 1
+
+    rows = session.scalars(select(Track)).all()
+    assert len(rows) == 1
+    assert rows[0].id == original_id  # preserves identity (and future features)
+    assert rows[0].path == str(dst.resolve())
+
+
+def test_scan_detects_move_across_directories(tmp_path, session):
+    src = tmp_path / "old_dir" / "song.mp3"
+    _make_real_mp3(src)
+    scan(tmp_path, session)
+    original_id = session.scalars(select(Track)).first().id
+
+    dst_dir = tmp_path / "new_dir"
+    dst_dir.mkdir()
+    dst = dst_dir / "song.mp3"
+    src.rename(dst)
+
+    result = scan(tmp_path, session)
+    assert result.moved == 1
+    assert result.added == 0
+    assert result.removed == 0
+    track = session.scalars(select(Track)).first()
+    assert track.id == original_id
+    assert track.path == str(dst.resolve())
