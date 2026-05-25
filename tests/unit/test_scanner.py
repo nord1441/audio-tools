@@ -104,3 +104,43 @@ def test_scan_is_idempotent(tmp_path, session):
     assert result2.added == 0
     assert result2.skipped == 0
     assert len(session.scalars(select(Track)).all()) == 1
+
+
+import os
+import time
+
+
+def test_scan_detects_mtime_change_and_updates(tmp_path, session):
+    f = tmp_path / "a.mp3"
+    _make_real_mp3(f)
+    scan(tmp_path, session)
+
+    # Modify mtime explicitly (and content by re-copying so size is realistic)
+    new_time = time.time() + 100
+    os.utime(f, (new_time, new_time))
+
+    result = scan(tmp_path, session)
+    assert result.added == 0
+    assert result.updated == 1
+
+    track = session.scalars(select(Track)).first()
+    assert track.mtime == new_time
+
+
+def test_scan_marks_missing_files_as_removed(tmp_path, session):
+    f = tmp_path / "a.mp3"
+    _make_real_mp3(f)
+    scan(tmp_path, session)
+    assert session.scalar(select(Track).where(Track.path == str(f.resolve()))) is not None
+
+    f.unlink()
+    result = scan(tmp_path, session)
+    assert result.removed == 1
+    assert session.scalar(select(Track)) is None
+
+
+def test_scan_unchanged_files_are_noops(tmp_path, session):
+    _make_real_mp3(tmp_path / "a.mp3")
+    scan(tmp_path, session)
+    result = scan(tmp_path, session)
+    assert result == ScanResult(added=0, updated=0, removed=0, moved=0, skipped=0)
