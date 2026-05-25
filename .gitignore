@@ -1,1 +1,16 @@
 .superpowers/
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+tests/fixtures/audio/*.mp3
+tests/fixtures/audio/*.flac
+tests/fixtures/audio/*.wav
