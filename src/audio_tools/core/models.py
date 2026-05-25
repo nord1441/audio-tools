@@ -1,8 +1,7 @@
-from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Float, Index, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from audio_tools.core.db import Base
 
