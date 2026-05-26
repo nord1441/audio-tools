@@ -1,14 +1,21 @@
+import concurrent.futures as cf
 import hashlib
+import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, Protocol, TypedDict
+from typing import Optional, Protocol, TypedDict
 
 import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from audio_tools.core.models import Features, Track
+
+
+def _utc_epoch(dt: datetime) -> float:
+    """Convert a naive datetime (assumed UTC) to Unix epoch seconds."""
+    return dt.replace(tzinfo=timezone.utc).timestamp()
 
 
 class FeatureDict(TypedDict, total=False):
@@ -72,20 +79,13 @@ class FakeBackend:
 
 
 def _select_tracks_to_analyze(session: Session, rescan: bool) -> list[Track]:
-    """Return tracks with no features OR features older than the track's mtime
-    (which the scanner refreshes on file change), OR all tracks when rescan=True.
-    """
+    """Return tracks needing (re-)analysis."""
     if rescan:
         return list(session.scalars(select(Track)).all())
-    # outer-join: no features → analyze; or features.analyzed_at < epoch(track.mtime)
-    stmt = select(Track).outerjoin(Features, Features.track_id == Track.id)
     rows: list[Track] = []
-    for track in session.scalars(stmt).unique().all():
+    for track in session.scalars(select(Track)).all():
         f = session.get(Features, track.id)
-        if f is None:
-            rows.append(track)
-            continue
-        if f.analyzed_at.timestamp() < track.mtime:
+        if f is None or _utc_epoch(f.analyzed_at) < track.mtime:
             rows.append(track)
     return rows
 
@@ -126,7 +126,11 @@ def analyze_tracks(
     """Analyze tracks that need (re-)analysis using *backend*.
 
     Single-threaded path is used by tests and the FakeBackend; the parallel
-    path (Task 6) wraps the same backend in a ProcessPoolExecutor.
+    path wraps the same backend in a ProcessPoolExecutor.
+
+    Timeout semantics: the *backend* is expected to honor ``timeout_s`` and
+    raise :class:`AnalyzeTimeout` if exceeded. ``cf.as_completed`` only yields
+    already-finished futures, so the executor does not enforce a timeout here.
     """
     result = AnalyzeResult()
     tracks = _select_tracks_to_analyze(session, rescan=rescan)
@@ -143,6 +147,10 @@ def analyze_tracks(
                 track.last_analysis_error = str(e)
                 result.failed += 1
                 continue
+            except Exception as e:
+                track.last_analysis_error = f"unexpected: {type(e).__name__}: {e}"
+                result.failed += 1
+                continue
             track.last_analysis_error = None
             _upsert_features(session, track.id, meta)
             result.analyzed += 1
@@ -150,36 +158,30 @@ def analyze_tracks(
         return result
 
     # Parallel path
-    import concurrent.futures as cf
-    import os
-
     worker_count = workers or os.cpu_count() or 1
     # Snapshot to avoid holding live ORM objects in the subprocess
     work = [(t.id, t.path) for t in tracks]
 
-    # Backend must be picklable. Both FakeBackend and EssentiaBackend are.
-    backend_pickle = backend
-
     with cf.ProcessPoolExecutor(max_workers=worker_count) as pool:
         futures = {
-            pool.submit(_analyze_one, backend_pickle, path): track_id
+            pool.submit(_analyze_one, backend, path): track_id
             for track_id, path in work
         }
         for fut in cf.as_completed(futures):
             track_id = futures[fut]
             track = session.get(Track, track_id)
             try:
-                meta = fut.result(timeout=timeout_s)
-            except cf.TimeoutError:
-                track.last_analysis_error = f"timeout: exceeded {timeout_s}s"
-                result.failed += 1
-                continue
+                meta = fut.result()
             except AnalyzeTimeout as e:
                 track.last_analysis_error = f"timeout: {e}"
                 result.failed += 1
                 continue
             except AnalyzeError as e:
                 track.last_analysis_error = str(e)
+                result.failed += 1
+                continue
+            except Exception as e:
+                track.last_analysis_error = f"unexpected: {type(e).__name__}: {e}"
                 result.failed += 1
                 continue
             track.last_analysis_error = None

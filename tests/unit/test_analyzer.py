@@ -114,3 +114,39 @@ def test_analyze_tracks_parallel_uses_processpool(tmp_path, session, monkeypatch
     assert result.analyzed == 3
     rows = session.scalars(select(Features)).all()
     assert len(rows) == 3
+
+
+def test_analyze_tracks_idempotent_under_nonutc_tz(tmp_path, session, monkeypatch):
+    """Regression: analyzed_at comparison must not depend on host TZ."""
+    import time
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    if hasattr(time, "tzset"):
+        time.tzset()
+
+    f = tmp_path / "a.mp3"
+    f.write_bytes(b"x")
+    # Use a real-world mtime so the comparison is realistic.
+    real_mtime = f.stat().st_mtime
+    track = _add_track(session, str(f), mtime=real_mtime)
+
+    analyze_tracks(session, FakeBackend(), single_threaded=True)
+    # Second invocation must be a no-op
+    result = analyze_tracks(session, FakeBackend(), single_threaded=True)
+    assert result.analyzed == 0, (
+        "Idempotency broken under non-UTC TZ — analyzed_at comparison "
+        "must treat the naive datetime as UTC."
+    )
+
+
+def test_analyze_tracks_records_unexpected_exception(tmp_path, session):
+    _add_track(session, str(tmp_path / "weird.mp3"))
+
+    class WeirdBackend(FakeBackend):
+        def analyze(self, path):
+            raise OSError("disk on fire")
+
+    result = analyze_tracks(session, WeirdBackend(), single_threaded=True)
+    assert result.failed == 1
+    track = session.scalar(select(Track))
+    assert "unexpected" in track.last_analysis_error.lower()
+    assert "OSError" in track.last_analysis_error or "disk on fire" in track.last_analysis_error
