@@ -184,3 +184,31 @@ def test_cli_cluster_incremental_when_clusters_exist(tmp_path, monkeypatch):
     result = runner.invoke(main, ["cluster"])
     assert result.exit_code == 0, result.output
     assert "assigned=1" in result.output
+
+
+def test_cli_playlists_writes_one_file_per_cluster(tmp_path, monkeypatch):
+    _ensure_fixtures()
+    music = tmp_path / "music"; music.mkdir()
+    for n in ("a.mp3", "b.mp3", "c.mp3", "d.mp3"):
+        shutil.copy(FIXTURE_MP3, music / n)
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", "1")
+    from audio_tools.core.db import Base, make_engine
+    Base.metadata.create_all(make_engine(db))
+
+    runner = CliRunner()
+    runner.invoke(main, ["scan", str(music)])
+    runner.invoke(main, ["analyze", "--backend=fake"])
+    runner.invoke(main, ["cluster", "--k=2", "--force"])
+
+    out = tmp_path / "playlists"
+    result = runner.invoke(main, ["playlists", f"--out-dir={out}"])
+    assert result.exit_code == 0, result.output
+    assert out.is_dir()
+    written = list(out.glob("*.m3u"))
+    assert 1 <= len(written) <= 2  # FakeBackend may produce singleton or split clusters
+    for p in written:
+        body = p.read_text(encoding="utf-8")
+        assert body.startswith("#EXTM3U")

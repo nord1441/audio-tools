@@ -11,6 +11,7 @@ from audio_tools import __version__, paths
 from audio_tools import paths as paths_mod
 from audio_tools.core import analyzer as analyzer_mod
 from audio_tools.core import clusterer as clusterer_mod
+from audio_tools.core import playlist_builder as playlist_mod
 from audio_tools.core import scanner
 from audio_tools.core.db import make_engine
 from audio_tools.core.model_registry import EXPECTED_MODELS, ModelFile  # noqa: F401
@@ -163,3 +164,16 @@ def cluster(k: Optional[int], incremental: bool, force: bool):
         except clusterer_mod.ClusterError as e:
             raise click.ClickException(str(e))
         click.echo(f"Cluster complete: clusters={target_k} tracks={n}")
+
+
+@main.command()
+@click.option("--out-dir", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Directory to write m3u files (default: XDG playlists dir).")
+def playlists(out_dir: Optional[Path]):
+    """Write one m3u per cluster to OUT_DIR."""
+    db_path = _resolve_db_path()
+    engine = make_engine(db_path)
+    target_dir = out_dir or paths_mod.playlists_dir()
+    with Session(engine, future=True) as session:
+        written = playlist_mod.write_playlists(session, target_dir)
+    click.echo(f"Wrote {len(written)} playlist(s) to {target_dir}")
