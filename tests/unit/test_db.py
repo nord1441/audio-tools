@@ -185,3 +185,31 @@ def test_assignment_cascades_when_track_deleted(session):
     assert session.get(ClusterAssignment, track.id) is None
     # Cluster row itself is untouched.
     assert session.get(Cluster, c.id) is not None
+
+
+def test_transfer_session_insert_and_query(session):
+    profile = DeviceProfile(
+        name="walkman", codec="opus", container="ogg",
+        max_bitrate=128, min_bitrate=64, bitrate_step=32,
+        max_size_bytes=14_000_000_000, sample_rate_max=48000,
+        m3u_path_style="relative", folder_layout="{artist}/{title}",
+    )
+    session.add(profile); session.flush()
+
+    from audio_tools.core.models import TransferSession
+    ts = TransferSession(
+        profile_id=profile.id,
+        started_at=datetime(2026, 5, 26, 13, 0, 0),
+        status="running",
+        bytes_transferred=0,
+        bitrate_kbps=128,
+        kept_count=42,
+        dropped_count=3,
+    )
+    session.add(ts); session.commit()
+
+    fetched = session.get(TransferSession, ts.id)
+    assert fetched.status == "running"
+    assert fetched.bitrate_kbps == 128
+    assert fetched.kept_count == 42
+    assert fetched.profile_id == profile.id

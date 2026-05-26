@@ -99,3 +99,20 @@ class ClusterAssignment(Base):
     assigned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (Index("ix_cluster_assignments_cluster_id", "cluster_id"),)
+
+
+class TransferSession(Base):
+    __tablename__ = "transfer_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("device_profiles.id", ondelete="RESTRICT"), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    bytes_transferred: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bitrate_kbps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    kept_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dropped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
