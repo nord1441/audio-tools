@@ -52,3 +52,51 @@ def test_cli_scan_errors_when_dir_missing(tmp_path, monkeypatch):
     result = runner.invoke(main, ["scan", str(tmp_path / "does_not_exist")])
     assert result.exit_code != 0
     assert "does not exist" in result.output.lower() or "no such" in result.output.lower()
+
+
+def test_cli_fetch_models_writes_files(tmp_path, monkeypatch):
+    """Stub the downloader and assert files land in models_dir()."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    import audio_tools.cli as cli_mod
+    calls = []
+
+    def fake_download(url: str, dest: Path) -> str:
+        calls.append((url, dest))
+        dest.write_bytes(b"FAKE_MODEL")
+        import hashlib
+        return hashlib.sha256(b"FAKE_MODEL").hexdigest()
+
+    monkeypatch.setattr(cli_mod, "_download_to_file", fake_download)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["fetch-models"])
+    assert result.exit_code == 0, result.output
+
+    from audio_tools.core.model_registry import EXPECTED_MODELS
+    from audio_tools.paths import models_dir
+    for m in EXPECTED_MODELS:
+        assert (models_dir() / m.filename).exists()
+    assert len(calls) == len(EXPECTED_MODELS)
+
+
+def test_cli_fetch_models_skips_existing(tmp_path, monkeypatch):
+    """If a file already exists with no hash to verify, fetch-models leaves it."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    from audio_tools.paths import models_dir
+    from audio_tools.core.model_registry import EXPECTED_MODELS
+    md = models_dir()
+    md.mkdir(parents=True, exist_ok=True)
+    for m in EXPECTED_MODELS:
+        (md / m.filename).write_bytes(b"already here")
+
+    import audio_tools.cli as cli_mod
+    monkeypatch.setattr(
+        cli_mod, "_download_to_file",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not download")),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["fetch-models"])
+    assert result.exit_code == 0
+    assert "already present" in result.output.lower() or "skip" in result.output.lower()
