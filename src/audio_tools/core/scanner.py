@@ -1,4 +1,3 @@
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
@@ -7,10 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from audio_tools.core import tags
+from audio_tools.core.hashing import sha1_of
 from audio_tools.core.models import Track
 
 SUPPORTED_EXTENSIONS = frozenset({".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav"})
-_HASH_CHUNK = 1024 * 1024  # 1 MiB
 
 
 @dataclass
@@ -27,17 +26,6 @@ def discover_audio_files(root: Path) -> Iterator[Path]:
     for path in root.rglob("*"):
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
             yield path
-
-
-def sha1_of(path: Path) -> str:
-    h = hashlib.sha1()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(_HASH_CHUNK)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _read_meta_and_size(file_path: Path) -> Optional[dict]:
