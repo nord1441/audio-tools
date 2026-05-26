@@ -35,3 +35,16 @@ def test_ensure_dirs_creates_them(monkeypatch, tmp_path):
     assert paths.data_dir().is_dir()
     assert paths.device_profiles_dir().is_dir()
     assert paths.playlists_dir().is_dir()
+
+
+def test_models_dir_under_xdg_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert paths.models_dir() == tmp_path / "audio-tools" / "models"
+
+
+def test_ensure_dirs_creates_models_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    paths.ensure_dirs()
+    assert paths.models_dir().is_dir()

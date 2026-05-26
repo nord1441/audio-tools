@@ -93,3 +93,95 @@ def test_device_profile_name_unique(session):
     from sqlalchemy.exc import IntegrityError
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+import numpy as np
+from datetime import datetime
+
+from audio_tools.core.models import Features
+
+
+def test_features_insert_and_query(session):
+    track = Track(path="/m/a.mp3", mtime=0.0, size=1)
+    session.add(track)
+    session.flush()  # populate id
+
+    emb = np.arange(200, dtype=np.float32).tobytes()
+    f = Features(
+        track_id=track.id,
+        bpm=128.0, key="C", scale="major",
+        energy=0.7, danceability=0.6,
+        mood_happy=0.5, mood_sad=0.1, mood_aggressive=0.2, mood_relaxed=0.4,
+        loudness=-12.5, spectral_centroid=2500.0,
+        embedding=emb,
+        analyzed_at=datetime(2026, 5, 26, 12, 0, 0),
+    )
+    session.add(f)
+    session.commit()
+
+    fetched = session.get(Features, track.id)
+    assert fetched.bpm == 128.0
+    assert fetched.key == "C"
+    assert len(fetched.embedding) == 200 * 4  # 200 float32s
+
+
+def test_features_cascade_delete_when_track_deleted(session):
+    track = Track(path="/m/x.mp3", mtime=0.0, size=1)
+    session.add(track)
+    session.flush()
+    session.add(Features(track_id=track.id, embedding=b"\x00" * 800, analyzed_at=datetime.now()))
+    session.commit()
+
+    session.delete(track)
+    session.commit()
+    assert session.get(Features, track.id) is None
+
+
+from audio_tools.core.models import Cluster, ClusterAssignment
+
+
+def test_cluster_and_assignment_roundtrip(session):
+    track = Track(path="/m/c.mp3", mtime=0.0, size=1)
+    session.add(track)
+    session.flush()
+    c = Cluster(
+        name="Workout",
+        k_value=4,
+        centroid=b"\x00" * 800,
+        created_at=datetime(2026, 5, 26, 12, 0, 0),
+    )
+    session.add(c)
+    session.flush()
+    session.add(ClusterAssignment(
+        track_id=track.id,
+        cluster_id=c.id,
+        distance=0.42,
+        assigned_at=datetime(2026, 5, 26, 12, 0, 0),
+    ))
+    session.commit()
+
+    fetched = session.get(Cluster, c.id)
+    assert fetched.name == "Workout"
+    assert fetched.k_value == 4
+
+    assignment = session.get(ClusterAssignment, track.id)
+    assert assignment.cluster_id == c.id
+    assert assignment.distance == 0.42
+
+
+def test_assignment_cascades_when_track_deleted(session):
+    track = Track(path="/m/d.mp3", mtime=0.0, size=1)
+    session.add(track)
+    session.flush()
+    c = Cluster(name="X", k_value=2, centroid=b"\x00" * 800, created_at=datetime.now())
+    session.add(c); session.flush()
+    session.add(ClusterAssignment(
+        track_id=track.id, cluster_id=c.id, distance=0.0, assigned_at=datetime.now()
+    ))
+    session.commit()
+
+    session.delete(track)
+    session.commit()
+    assert session.get(ClusterAssignment, track.id) is None
+    # Cluster row itself is untouched.
+    assert session.get(Cluster, c.id) is not None

@@ -1,6 +1,16 @@
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Float, Index, Integer, String, Text
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from audio_tools.core.db import Base
@@ -42,3 +52,50 @@ class DeviceProfile(Base):
     sample_rate_max: Mapped[int] = mapped_column(Integer, nullable=False)
     m3u_path_style: Mapped[str] = mapped_column(String, nullable=False)
     folder_layout: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class Features(Base):
+    __tablename__ = "features"
+
+    track_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), primary_key=True
+    )
+    bpm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    scale: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    energy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    danceability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    mood_happy: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    mood_sad: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    mood_aggressive: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    mood_relaxed: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    loudness: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    spectral_centroid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    embedding: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class Cluster(Base):
+    __tablename__ = "clusters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    color: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    k_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    centroid: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class ClusterAssignment(Base):
+    __tablename__ = "cluster_assignments"
+
+    track_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tracks.id", ondelete="CASCADE"), primary_key=True
+    )
+    cluster_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("clusters.id", ondelete="CASCADE"), nullable=False
+    )
+    distance: Mapped[float] = mapped_column(Float, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (Index("ix_cluster_assignments_cluster_id", "cluster_id"),)
