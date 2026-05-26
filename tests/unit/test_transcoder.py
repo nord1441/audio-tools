@@ -8,6 +8,11 @@ from audio_tools.core.transcoder import (
     TranscodeError,
     transcode,
 )
+from audio_tools.core.transcoder import (
+    TranscodeItem,
+    TranscodeOutcome,
+    batch_transcode,
+)
 
 
 def test_fake_runner_records_args(tmp_path):
@@ -69,3 +74,54 @@ def test_transcode_rc_nonzero_raises(tmp_path):
     with pytest.raises(TranscodeError, match="ffmpeg failed"):
         transcode(FailingRunner(), src, tmp_path / "out.opus",
                   codec="opus", bitrate_kbps=128, sample_rate_max=48000)
+
+
+def test_batch_transcode_runs_all_items(tmp_path):
+    runner = FakeFfmpegRunner()
+    items = []
+    for i in range(3):
+        src = tmp_path / f"in_{i}.mp3"; src.write_bytes(b"x")
+        items.append(TranscodeItem(
+            track_id=i,
+            src=src,
+            dst=tmp_path / f"out_{i}.opus",
+            codec="opus",
+            bitrate_kbps=128,
+            sample_rate_max=48000,
+        ))
+    outcomes = list(batch_transcode(runner, items, workers=2))
+    assert len(outcomes) == 3
+    assert all(o.ok for o in outcomes)
+    assert {o.track_id for o in outcomes} == {0, 1, 2}
+
+
+def test_batch_transcode_collects_errors(tmp_path):
+    class HalfFailingRunner:
+        def __init__(self):
+            self.calls = 0
+        def run(self, args):
+            self.calls += 1
+            from subprocess import CompletedProcess
+            if self.calls == 2:
+                return CompletedProcess(args, returncode=1, stdout=b"", stderr=b"boom")
+            import shutil
+            try:
+                i_idx = args.index("-i")
+                shutil.copyfile(args[i_idx + 1], args[-1])
+            except (ValueError, IndexError):
+                pass
+            return CompletedProcess(args, returncode=0, stdout=b"", stderr=b"")
+
+    runner = HalfFailingRunner()
+    items = [
+        TranscodeItem(track_id=i, src=tmp_path / f"in_{i}.mp3",
+                      dst=tmp_path / f"out_{i}.opus",
+                      codec="opus", bitrate_kbps=128, sample_rate_max=48000)
+        for i in range(3)
+    ]
+    for it in items:
+        it.src.write_bytes(b"x")
+    outcomes = list(batch_transcode(runner, items, workers=1))
+    statuses = {o.track_id: o.ok for o in outcomes}
+    assert statuses[1] is False
+    assert sum(s for s in statuses.values()) == 2
