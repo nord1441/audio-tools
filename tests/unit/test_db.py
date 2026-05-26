@@ -93,3 +93,45 @@ def test_device_profile_name_unique(session):
     from sqlalchemy.exc import IntegrityError
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+import numpy as np
+from datetime import datetime
+
+from audio_tools.core.models import Features
+
+
+def test_features_insert_and_query(session):
+    track = Track(path="/m/a.mp3", mtime=0.0, size=1)
+    session.add(track)
+    session.flush()  # populate id
+
+    emb = np.arange(200, dtype=np.float32).tobytes()
+    f = Features(
+        track_id=track.id,
+        bpm=128.0, key="C", scale="major",
+        energy=0.7, danceability=0.6,
+        mood_happy=0.5, mood_sad=0.1, mood_aggressive=0.2, mood_relaxed=0.4,
+        loudness=-12.5, spectral_centroid=2500.0,
+        embedding=emb,
+        analyzed_at=datetime(2026, 5, 26, 12, 0, 0),
+    )
+    session.add(f)
+    session.commit()
+
+    fetched = session.get(Features, track.id)
+    assert fetched.bpm == 128.0
+    assert fetched.key == "C"
+    assert len(fetched.embedding) == 200 * 4  # 200 float32s
+
+
+def test_features_cascade_delete_when_track_deleted(session):
+    track = Track(path="/m/x.mp3", mtime=0.0, size=1)
+    session.add(track)
+    session.flush()
+    session.add(Features(track_id=track.id, embedding=b"\x00" * 800, analyzed_at=datetime.now()))
+    session.commit()
+
+    session.delete(track)
+    session.commit()
+    assert session.get(Features, track.id) is None
