@@ -68,3 +68,16 @@ def test_cluster_view_lists_clusters(qtbot, session_factory_from):
     list_w = v.findChild(QListWidget, "cluster_list")
     assert list_w.count() == 1
     assert "Workout" in list_w.item(0).text()
+
+
+def test_transfer_view_run_button_disabled_without_selection(qtbot, session_factory_from):
+    from audio_tools.gui.transfer_view import TransferView
+    from PySide6.QtWidgets import QPushButton
+
+    factory, _engine = session_factory_from
+    sb = QStatusBar()
+    v = TransferView(session_factory=factory, status_bar=sb)
+    qtbot.addWidget(v)
+    run_btn = v.findChild(QPushButton, "run_btn")
+    assert run_btn is not None
+    assert not run_btn.isEnabled()
