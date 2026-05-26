@@ -103,3 +103,14 @@ def test_devices_view_lists_profiles(qtbot, session_factory_from):
     v.reload()
     table = v.findChild(QTableView, "devices_table")
     assert table.model().rowCount() == 1
+
+
+def test_settings_view_shows_paths(qtbot):
+    from audio_tools.gui.settings_view import SettingsView
+    from PySide6.QtWidgets import QLabel
+
+    v = SettingsView()
+    qtbot.addWidget(v)
+    labels = v.findChildren(QLabel)
+    texts = " ".join(l.text() for l in labels)
+    assert "audio-tools" in texts.lower() or "version" in texts.lower()
