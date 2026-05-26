@@ -4,14 +4,17 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from audio_tools import __version__, paths
 from audio_tools import paths as paths_mod
 from audio_tools.core import analyzer as analyzer_mod
+from audio_tools.core import clusterer as clusterer_mod
 from audio_tools.core import scanner
 from audio_tools.core.db import make_engine
 from audio_tools.core.model_registry import EXPECTED_MODELS, ModelFile  # noqa: F401
+from audio_tools.core.models import Cluster as ClusterModel
 
 
 def _resolve_db_path() -> Path:
@@ -125,3 +128,38 @@ def analyze(backend: str, rescan: bool, workers: Optional[int], timeout: int, si
             rescan=rescan,
         )
     click.echo(f"Analyze complete: analyzed={result.analyzed} failed={result.failed}")
+
+
+@main.command()
+@click.option("--k", type=int, default=None, help="Number of clusters (forces a full re-fit). Default 6 if no clusters exist.")
+@click.option("--incremental", is_flag=True, help="Force incremental mode (refuse to re-fit).")
+@click.option("--force", is_flag=True, help="Skip the confirmation prompt for destructive re-fit.")
+def cluster(k: Optional[int], incremental: bool, force: bool):
+    """Cluster tracks by feature embedding."""
+    if k is not None and incremental:
+        raise click.UsageError("--k and --incremental are mutually exclusive")
+
+    db_path = _resolve_db_path()
+    engine = make_engine(db_path)
+    with Session(engine, future=True) as session:
+        existing = session.scalar(select(ClusterModel)) is not None
+
+        if incremental or (k is None and existing):
+            try:
+                assigned = clusterer_mod.assign_new(session)
+            except clusterer_mod.ClusterError as e:
+                raise click.ClickException(str(e))
+            click.echo(f"Cluster (incremental): assigned={assigned}")
+            return
+
+        target_k = k if k is not None else 6
+        if existing and not force:
+            click.confirm(
+                f"This will discard existing clusters and re-fit with k={target_k}. Continue?",
+                abort=True,
+            )
+        try:
+            n = clusterer_mod.recluster(session, k=target_k)
+        except clusterer_mod.ClusterError as e:
+            raise click.ClickException(str(e))
+        click.echo(f"Cluster complete: clusters={target_k} tracks={n}")

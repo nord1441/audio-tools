@@ -137,3 +137,50 @@ def test_cli_analyze_refuses_fake_without_env_flag(tmp_path, monkeypatch):
     result = runner.invoke(main, ["analyze", "--backend=fake"])
     assert result.exit_code != 0
     assert "ALLOW_FAKE" in result.output or "fake backend" in result.output.lower()
+
+
+def test_cli_cluster_initial_uses_default_k(tmp_path, monkeypatch):
+    _ensure_fixtures()
+    music = tmp_path / "music"; music.mkdir()
+    shutil.copy(FIXTURE_MP3, music / "a.mp3")
+    shutil.copy(FIXTURE_MP3, music / "b.mp3")
+    shutil.copy(FIXTURE_MP3, music / "c.mp3")
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", "1")
+    from audio_tools.core.db import Base, make_engine
+    Base.metadata.create_all(make_engine(db))
+
+    runner = CliRunner()
+    assert runner.invoke(main, ["scan", str(music)]).exit_code == 0
+    assert runner.invoke(main, ["analyze", "--backend=fake"]).exit_code == 0
+    result = runner.invoke(main, ["cluster", "--k=2", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "clusters=2" in result.output
+
+
+def test_cli_cluster_incremental_when_clusters_exist(tmp_path, monkeypatch):
+    _ensure_fixtures()
+    music = tmp_path / "music"; music.mkdir()
+    for n in ("a.mp3", "b.mp3", "c.mp3", "d.mp3"):
+        shutil.copy(FIXTURE_MP3, music / n)
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", "1")
+    from audio_tools.core.db import Base, make_engine
+    Base.metadata.create_all(make_engine(db))
+
+    runner = CliRunner()
+    runner.invoke(main, ["scan", str(music)])
+    runner.invoke(main, ["analyze", "--backend=fake"])
+    runner.invoke(main, ["cluster", "--k=2", "--force"])
+
+    # Add a new track, re-scan, re-analyze, then cluster with no args → incremental
+    shutil.copy(FIXTURE_MP3, music / "new.mp3")
+    runner.invoke(main, ["scan", str(music)])
+    runner.invoke(main, ["analyze", "--backend=fake"])
+    result = runner.invoke(main, ["cluster"])
+    assert result.exit_code == 0, result.output
+    assert "assigned=1" in result.output
