@@ -74,5 +74,39 @@ def recluster(session: Session, k: int) -> int:
 
 
 def assign_new(session: Session) -> int:
-    """Stub - implemented in Task 11."""
-    raise NotImplementedError("assign_new arrives in Task 11")
+    """Assign tracks whose features exist but have no cluster_assignments row.
+
+    Uses the nearest existing centroid; never modifies existing assignments.
+    Returns the count of new assignments.
+    """
+    clusters = session.scalars(select(Cluster)).all()
+    if not clusters:
+        raise ClusterError("no clusters; run `audio-tools cluster --k N` first")
+
+    centroids = np.stack([
+        np.frombuffer(c.centroid, dtype=np.float32) for c in clusters
+    ])
+    cluster_ids = [c.id for c in clusters]
+
+    unassigned_stmt = (
+        select(Features)
+        .outerjoin(ClusterAssignment, ClusterAssignment.track_id == Features.track_id)
+        .where(ClusterAssignment.track_id.is_(None))
+    )
+    unassigned = session.scalars(unassigned_stmt).all()
+    if not unassigned:
+        return 0
+
+    now = datetime.utcnow()
+    for feat in unassigned:
+        emb = np.frombuffer(feat.embedding, dtype=np.float32)
+        distances = np.linalg.norm(centroids - emb, axis=1)
+        best = int(np.argmin(distances))
+        session.add(ClusterAssignment(
+            track_id=feat.track_id,
+            cluster_id=cluster_ids[best],
+            distance=float(distances[best]),
+            assigned_at=now,
+        ))
+    session.commit()
+    return len(unassigned)

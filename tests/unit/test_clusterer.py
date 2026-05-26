@@ -62,3 +62,64 @@ def test_recluster_overwrites_prior_clusters(session):
     recluster(session, k=3)
     recluster(session, k=2)
     assert len(session.scalars(select(Cluster)).all()) == 2
+
+
+def test_assign_new_routes_unassigned_to_nearest_cluster(session):
+    _seed_tracks_with_blob_embeddings(session, n_per_cluster=5, k=3)
+    recluster(session, k=3)
+
+    # Add a new track whose embedding is dead-on cluster 0's center
+    new = Track(path="/m/new.mp3", mtime=0.0, size=1)
+    session.add(new); session.flush()
+    seeded_center = np.zeros(200, dtype=np.float32)
+    seeded_center[0:10] = 10.0
+    session.add(Features(track_id=new.id, embedding=seeded_center.tobytes(), analyzed_at=datetime.utcnow()))
+    session.commit()
+
+    count = assign_new(session)
+    assert count == 1
+
+    a = session.get(ClusterAssignment, new.id)
+    assert a is not None
+    # The other 5 tracks seeded near center 0 share its cluster id.
+    sibling_paths = [
+        session.get(Track, x.track_id).path
+        for x in session.scalars(select(ClusterAssignment).where(ClusterAssignment.cluster_id == a.cluster_id)).all()
+        if x.track_id != new.id
+    ]
+    assert all("c0-" in p for p in sibling_paths)
+
+
+def test_assign_new_is_idempotent(session):
+    _seed_tracks_with_blob_embeddings(session, n_per_cluster=5, k=3)
+    recluster(session, k=3)
+    # No new tracks → 0 new assignments
+    assert assign_new(session) == 0
+
+
+def test_assign_new_without_clusters_raises(session):
+    _seed_tracks_with_blob_embeddings(session, n_per_cluster=5, k=3)
+    # Skip recluster; no clusters exist yet
+    with pytest.raises(ClusterError, match="no clusters"):
+        assign_new(session)
+
+
+def test_assign_new_does_not_change_existing_assignments(session):
+    _seed_tracks_with_blob_embeddings(session, n_per_cluster=5, k=3)
+    recluster(session, k=3)
+    before = {a.track_id: a.cluster_id for a in session.scalars(select(ClusterAssignment)).all()}
+
+    # Add 3 new tracks belonging clearly to cluster 1
+    seeded_center = np.zeros(200, dtype=np.float32)
+    seeded_center[10:20] = 10.0
+    for j in range(3):
+        t = Track(path=f"/m/late-{j}.mp3", mtime=0.0, size=1)
+        session.add(t); session.flush()
+        session.add(Features(track_id=t.id, embedding=seeded_center.tobytes(), analyzed_at=datetime.utcnow()))
+    session.commit()
+
+    assign_new(session)
+
+    after = {a.track_id: a.cluster_id for a in session.scalars(select(ClusterAssignment)).all()}
+    for tid, cid in before.items():
+        assert after[tid] == cid  # untouched
