@@ -306,3 +306,17 @@ def transfer(
         f"Transfer done: copied={outcome.copied} skipped={outcome.skipped} "
         f"failed={outcome.failed}"
     )
+
+
+@main.command("gui")
+@click.option("--db", "db_url", type=str, default=None,
+              help="Override DB URL (sqlite:///...). Defaults to XDG location.")
+def gui_cmd(db_url):
+    """Launch the desktop GUI."""
+    try:
+        from audio_tools.gui.app import run_gui
+    except ImportError as e:
+        raise click.UsageError(
+            f"GUI dependencies missing. Run `pip install -e .[gui]` first.\n({e})"
+        )
+    raise SystemExit(run_gui(db_url=db_url))
