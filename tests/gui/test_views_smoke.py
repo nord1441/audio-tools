@@ -81,3 +81,25 @@ def test_transfer_view_run_button_disabled_without_selection(qtbot, session_fact
     run_btn = v.findChild(QPushButton, "run_btn")
     assert run_btn is not None
     assert not run_btn.isEnabled()
+
+
+def test_devices_view_lists_profiles(qtbot, session_factory_from):
+    from audio_tools.core.models import DeviceProfile
+    from audio_tools.gui.devices_view import DevicesView
+
+    factory, _engine = session_factory_from
+    with factory() as s:
+        s.add(DeviceProfile(
+            name="walkman", codec="opus", container="ogg",
+            max_bitrate=128, min_bitrate=64, bitrate_step=32,
+            max_size_bytes=14_000_000_000, sample_rate_max=48000,
+            m3u_path_style="relative", folder_layout="{title}",
+        ))
+        s.commit()
+
+    sb = QStatusBar()
+    v = DevicesView(session_factory=factory, status_bar=sb)
+    qtbot.addWidget(v)
+    v.reload()
+    table = v.findChild(QTableView, "devices_table")
+    assert table.model().rowCount() == 1
