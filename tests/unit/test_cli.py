@@ -212,3 +212,97 @@ def test_cli_playlists_writes_one_file_per_cluster(tmp_path, monkeypatch):
     for p in written:
         body = p.read_text(encoding="utf-8")
         assert body.startswith("#EXTM3U")
+
+
+def test_cli_transfer_dry_run(tmp_path, monkeypatch):
+    _ensure_fixtures()
+    music = tmp_path / "music"; music.mkdir()
+    shutil.copy(FIXTURE_MP3, music / "a.mp3")
+    shutil.copy(FIXTURE_MP3, music / "b.mp3")
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", "1")
+
+    from audio_tools.core.db import Base, make_engine
+    Base.metadata.create_all(make_engine(db))
+
+    profiles_dir = tmp_path / "profiles"; profiles_dir.mkdir()
+    (profiles_dir / "tiny.yaml").write_text(
+        "name: tiny\n"
+        "codec: opus\n"
+        "container: ogg\n"
+        "max_bitrate: 96\n"
+        "min_bitrate: 64\n"
+        "bitrate_step: 32\n"
+        "max_size_bytes: 100000\n"
+        "sample_rate_max: 48000\n"
+        "m3u_path_style: relative\n"
+        "folder_layout: \"{title}\"\n"
+    )
+
+    runner = CliRunner()
+    runner.invoke(main, ["scan", str(music)])
+    runner.invoke(main, ["analyze", "--backend=fake"])
+    runner.invoke(main, ["cluster", "--k=2", "--force"])
+
+    target_dir = tmp_path / "device"; target_dir.mkdir()
+    result = runner.invoke(main, [
+        "transfer",
+        "--profile", "tiny",
+        "--profile-dir", str(profiles_dir),
+        "--playlist", "Cluster 1",
+        "--target-dir", str(target_dir),
+        "--dry-run",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "bitrate=" in result.output
+    assert not list(target_dir.iterdir())
+
+
+def test_cli_transfer_executes_and_writes_files(tmp_path, monkeypatch):
+    _ensure_fixtures()
+    music = tmp_path / "music"; music.mkdir()
+    shutil.copy(FIXTURE_MP3, music / "a.mp3")
+    shutil.copy(FIXTURE_MP3, music / "b.mp3")
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", "1")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_FFMPEG", "1")
+
+    from audio_tools.core.db import Base, make_engine
+    Base.metadata.create_all(make_engine(db))
+
+    profiles_dir = tmp_path / "profiles"; profiles_dir.mkdir()
+    (profiles_dir / "p.yaml").write_text(
+        "name: p\n"
+        "codec: opus\n"
+        "container: ogg\n"
+        "max_bitrate: 96\n"
+        "min_bitrate: 64\n"
+        "bitrate_step: 32\n"
+        "max_size_bytes: 100000000\n"
+        "sample_rate_max: 48000\n"
+        "m3u_path_style: relative\n"
+        "folder_layout: \"{title}\"\n"
+    )
+
+    runner = CliRunner()
+    runner.invoke(main, ["scan", str(music)])
+    runner.invoke(main, ["analyze", "--backend=fake"])
+    runner.invoke(main, ["cluster", "--k=2", "--force"])
+
+    target_dir = tmp_path / "device"; target_dir.mkdir()
+    result = runner.invoke(main, [
+        "transfer",
+        "--profile", "p",
+        "--profile-dir", str(profiles_dir),
+        "--playlist", "Cluster 1",
+        "--target-dir", str(target_dir),
+        "--ffmpeg-backend", "fake",
+        "--yes",
+    ])
+    assert result.exit_code == 0, result.output
+    written = list(target_dir.rglob("*"))
+    assert any(p.is_file() for p in written)

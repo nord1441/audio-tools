@@ -177,3 +177,132 @@ def playlists(out_dir: Optional[Path]):
     with Session(engine, future=True) as session:
         written = playlist_mod.write_playlists(session, target_dir)
     click.echo(f"Wrote {len(written)} playlist(s) to {target_dir}")
+
+
+from pathlib import PurePath as _PurePath
+
+from audio_tools.core import device_profile as dp_mod
+from audio_tools.core import transfer as transfer_mod
+from audio_tools.core.models import (
+    Cluster as _ClusterModel,
+    ClusterAssignment as _ClusterAssignment,
+    DeviceProfile as _DeviceProfile,
+)
+from audio_tools.core.transcoder import FakeFfmpegRunner, RealFfmpegRunner
+from audio_tools.core.transfer_planner import plan as _plan
+from audio_tools.core.transfer_target import LocalDirectoryTarget
+
+
+def _build_ffmpeg_runner(name: str):
+    if name == "fake":
+        if os.getenv("AUDIO_TOOLS_ALLOW_FAKE_FFMPEG") != "1":
+            raise click.UsageError(
+                "fake ffmpeg disabled. Set AUDIO_TOOLS_ALLOW_FAKE_FFMPEG=1 to enable."
+            )
+        return FakeFfmpegRunner()
+    if name == "real":
+        return RealFfmpegRunner()
+    raise click.UsageError(f"Unknown ffmpeg backend: {name}")
+
+
+def _load_profile(session, name: str, profile_dir: Optional[Path]) -> _DeviceProfile:
+    existing = session.scalar(select(_DeviceProfile).where(_DeviceProfile.name == name))
+    if existing is not None:
+        return existing
+    pdir = profile_dir or paths_mod.device_profiles_dir()
+    yaml_path = pdir / f"{name}.yaml"
+    if not yaml_path.exists():
+        raise click.UsageError(f"Profile {name!r} not in DB and {yaml_path} does not exist")
+    return dp_mod.upsert_profile(yaml_path, session)
+
+
+def _collect_tracks_for_playlists(session, playlist_names: tuple[str, ...]) -> list:
+    from audio_tools.core.models import Track as _Track
+    out: list = []
+    for name in playlist_names:
+        cluster = session.scalar(select(_ClusterModel).where(_ClusterModel.name == name))
+        if cluster is None:
+            raise click.UsageError(f"No cluster named {name!r}")
+        stmt = (
+            select(_Track)
+            .join(_ClusterAssignment, _ClusterAssignment.track_id == _Track.id)
+            .where(_ClusterAssignment.cluster_id == cluster.id)
+            .order_by(_ClusterAssignment.distance.asc())
+        )
+        out.extend(session.scalars(stmt).all())
+    return out
+
+
+@main.command()
+@click.option("--profile", "profile_name", required=True)
+@click.option("--profile-dir", type=click.Path(file_okay=False, path_type=Path), default=None)
+@click.option("--playlist", "playlists", multiple=True, required=True)
+@click.option("--target-dir", type=click.Path(file_okay=False, path_type=Path), default=None)
+@click.option("--workers", type=int, default=None)
+@click.option("--dry-run", is_flag=True)
+@click.option("--keep-temp", is_flag=True)
+@click.option("--yes", is_flag=True, help="Skip the drop-confirmation prompt.")
+@click.option("--ffmpeg-backend", type=click.Choice(["real", "fake"]), default="real")
+def transfer(
+    profile_name: str,
+    profile_dir: Optional[Path],
+    playlists: tuple[str, ...],
+    target_dir: Optional[Path],
+    workers: Optional[int],
+    dry_run: bool,
+    keep_temp: bool,
+    yes: bool,
+    ffmpeg_backend: str,
+):
+    """Transcode and transfer one or more clusters to a device."""
+    db_path = _resolve_db_path()
+    engine = make_engine(db_path)
+    with Session(engine, future=True) as session:
+        profile = _load_profile(session, profile_name, profile_dir)
+        tracks = _collect_tracks_for_playlists(session, playlists)
+        if not tracks:
+            click.echo("No tracks to transfer.")
+            return
+
+        plan_obj = _plan(tracks, profile)
+        click.echo(
+            f"Plan: bitrate={plan_obj.bitrate_kbps} kept={len(plan_obj.kept)} "
+            f"dropped={len(plan_obj.dropped)} bytes={plan_obj.total_kept_bytes}"
+        )
+        if plan_obj.warnings:
+            for w in plan_obj.warnings:
+                click.echo(f"  warning: {w}")
+        if plan_obj.dropped and not yes and not dry_run:
+            for d in plan_obj.dropped[:10]:
+                click.echo(f"  drop: track_id={d.track_id} {d.source_path}")
+            if len(plan_obj.dropped) > 10:
+                click.echo(f"  …and {len(plan_obj.dropped) - 10} more")
+            click.confirm("Proceed with dropping these tracks?", abort=True)
+
+        if dry_run:
+            return
+
+        target_root = target_dir or (Path(profile.mount_hint) if profile.mount_hint else None)
+        if target_root is None:
+            raise click.UsageError("--target-dir required (profile has no mount_hint)")
+        target_root.mkdir(parents=True, exist_ok=True)
+        target = LocalDirectoryTarget(target_root)
+        runner = _build_ffmpeg_runner(ffmpeg_backend)
+
+        playlist_name = playlists[0] if len(playlists) == 1 else "combined"
+        m3u_relpath = _PurePath("Playlists") / f"{playlist_name}.m3u"
+        outcome = transfer_mod.execute_transfer(
+            session=session,
+            profile=profile,
+            plan=plan_obj,
+            target=target,
+            ffmpeg=runner,
+            m3u_relpath=m3u_relpath,
+            cache_dir=paths_mod.cache_dir() / "transcode",
+            workers=workers or 1,
+            keep_temp=keep_temp,
+        )
+    click.echo(
+        f"Transfer done: copied={outcome.copied} skipped={outcome.skipped} "
+        f"failed={outcome.failed}"
+    )
