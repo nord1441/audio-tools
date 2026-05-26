@@ -1,12 +1,14 @@
 import hashlib
 import os
 from pathlib import Path
+from typing import Optional
 
 import click
 from sqlalchemy.orm import Session
 
 from audio_tools import __version__, paths
 from audio_tools import paths as paths_mod
+from audio_tools.core import analyzer as analyzer_mod
 from audio_tools.core import scanner
 from audio_tools.core.db import make_engine
 from audio_tools.core.model_registry import EXPECTED_MODELS, ModelFile  # noqa: F401
@@ -87,3 +89,39 @@ def fetch_models():
         if m.sha256 == "REPLACE_AT_FETCH_TIME":
             click.echo(f"    (record this hash in model_registry.py: {actual})")
     click.echo(f"Models ready in {target_dir}")
+
+
+def _build_backend(name: str) -> analyzer_mod.AnalyzerBackend:
+    if name == "fake":
+        if os.getenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND") != "1":
+            raise click.UsageError(
+                "fake backend disabled by default. Set AUDIO_TOOLS_ALLOW_FAKE_BACKEND=1 to enable."
+            )
+        return analyzer_mod.FakeBackend()
+    if name == "essentia":
+        return analyzer_mod.EssentiaBackend(models_dir=paths_mod.models_dir())
+    raise click.UsageError(f"Unknown backend: {name!r} (expected fake|essentia)")
+
+
+@main.command()
+@click.option("--backend", type=click.Choice(["fake", "essentia"]), default="essentia",
+              show_default=True)
+@click.option("--rescan", is_flag=True, help="Re-analyze every track, ignoring existing features.")
+@click.option("--workers", type=int, default=None, help="Worker count (default: os.cpu_count()).")
+@click.option("--timeout", type=int, default=300, show_default=True, help="Per-track timeout seconds.")
+@click.option("--single-threaded", is_flag=True, help="Run in this process (mostly for debugging).")
+def analyze(backend: str, rescan: bool, workers: Optional[int], timeout: int, single_threaded: bool):
+    """Extract features for tracks that need analysis."""
+    db_path = _resolve_db_path()
+    engine = make_engine(db_path)
+    backend_impl = _build_backend(backend)
+    with Session(engine, future=True) as session:
+        result = analyzer_mod.analyze_tracks(
+            session,
+            backend_impl,
+            single_threaded=single_threaded,
+            workers=workers,
+            timeout_s=timeout,
+            rescan=rescan,
+        )
+    click.echo(f"Analyze complete: analyzed={result.analyzed} failed={result.failed}")

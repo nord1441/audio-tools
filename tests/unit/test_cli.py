@@ -100,3 +100,40 @@ def test_cli_fetch_models_skips_existing(tmp_path, monkeypatch):
     result = runner.invoke(main, ["fetch-models"])
     assert result.exit_code == 0
     assert "already present" in result.output.lower() or "skip" in result.output.lower()
+
+
+def test_cli_analyze_with_fake_backend(tmp_path, monkeypatch):
+    """`audio-tools analyze --backend=fake` should populate features."""
+    _ensure_fixtures()
+    music = tmp_path / "music"
+    music.mkdir()
+    shutil.copy(FIXTURE_MP3, music / "a.mp3")
+    shutil.copy(FIXTURE_MP3, music / "b.mp3")
+
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", "1")
+
+    from audio_tools.core.db import Base, make_engine
+    engine = make_engine(db)
+    Base.metadata.create_all(engine)
+
+    runner = CliRunner()
+    # Scan first to populate tracks.
+    assert runner.invoke(main, ["scan", str(music)]).exit_code == 0
+    result = runner.invoke(main, ["analyze", "--backend=fake"])
+    assert result.exit_code == 0, result.output
+    assert "analyzed=2" in result.output
+
+
+def test_cli_analyze_refuses_fake_without_env_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv("AUDIO_TOOLS_ALLOW_FAKE_BACKEND", raising=False)
+    db = tmp_path / "test.db"
+    monkeypatch.setenv("AUDIO_TOOLS_DB_URL", f"sqlite:///{db}")
+    from audio_tools.core.db import Base, make_engine
+    Base.metadata.create_all(make_engine(db))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["analyze", "--backend=fake"])
+    assert result.exit_code != 0
+    assert "ALLOW_FAKE" in result.output or "fake backend" in result.output.lower()
