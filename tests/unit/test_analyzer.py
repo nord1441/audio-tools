@@ -103,3 +103,14 @@ def test_analyze_tracks_rescan_overwrites_existing(tmp_path, session):
     analyze_tracks(session, FakeBackend(), single_threaded=True, rescan=True)
     updated = session.get(Features, track.id).analyzed_at
     assert updated > original
+
+
+def test_analyze_tracks_parallel_uses_processpool(tmp_path, session, monkeypatch):
+    """The parallel path must produce the same results as the single-threaded one."""
+    for name in ("a.mp3", "b.mp3", "c.mp3"):
+        _add_track(session, str(tmp_path / name))
+
+    result = analyze_tracks(session, FakeBackend(), single_threaded=False, workers=2)
+    assert result.analyzed == 3
+    rows = session.scalars(select(Features)).all()
+    assert len(rows) == 3

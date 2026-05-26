@@ -90,6 +90,11 @@ def _select_tracks_to_analyze(session: Session, rescan: bool) -> list[Track]:
     return rows
 
 
+def _analyze_one(backend: "AnalyzerBackend", path_str: str) -> "FeatureDict":
+    """Module-level subprocess entry point. Picklable backend required."""
+    return backend.analyze(Path(path_str))
+
+
 def _upsert_features(session: Session, track_id: int, meta: FeatureDict) -> None:
     existing = session.get(Features, track_id)
     payload = {
@@ -144,5 +149,42 @@ def analyze_tracks(
         session.commit()
         return result
 
-    # Parallel path: implemented in Task 6.
-    raise NotImplementedError("parallel path arrives in Task 6")
+    # Parallel path
+    import concurrent.futures as cf
+    import os
+
+    worker_count = workers or os.cpu_count() or 1
+    # Snapshot to avoid holding live ORM objects in the subprocess
+    work = [(t.id, t.path) for t in tracks]
+
+    # Backend must be picklable. Both FakeBackend and EssentiaBackend are.
+    backend_pickle = backend
+
+    with cf.ProcessPoolExecutor(max_workers=worker_count) as pool:
+        futures = {
+            pool.submit(_analyze_one, backend_pickle, path): track_id
+            for track_id, path in work
+        }
+        for fut in cf.as_completed(futures):
+            track_id = futures[fut]
+            track = session.get(Track, track_id)
+            try:
+                meta = fut.result(timeout=timeout_s)
+            except cf.TimeoutError:
+                track.last_analysis_error = f"timeout: exceeded {timeout_s}s"
+                result.failed += 1
+                continue
+            except AnalyzeTimeout as e:
+                track.last_analysis_error = f"timeout: {e}"
+                result.failed += 1
+                continue
+            except AnalyzeError as e:
+                track.last_analysis_error = str(e)
+                result.failed += 1
+                continue
+            track.last_analysis_error = None
+            _upsert_features(session, track_id, meta)
+            result.analyzed += 1
+
+    session.commit()
+    return result
